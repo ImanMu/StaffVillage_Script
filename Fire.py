@@ -3,18 +3,41 @@
 import arcpy 
 import os
 
-arcpy.env.workspace = r"D:\Amaala Staff Village\utilities\Infra Arcpro Projects\Fire 6A and 6B\Fire 6A and 6B.gdb"
-target_GDB = r"D:\Amaala Staff Village\utilities\Updated Target Schema\AMAALA GIS Schema_08July2026\TRSDC DB.gdb"
+GDB_6A = r"D:\Amaala Staff Village\utilities\Infra Arcpro Projects\Fire 6A and 6B\Fire 6A and 6B.gdb"
+GDB_6B = r"D:\Amaala Staff Village\utilities\Infra Arcpro Projects\Fire 6A and 6B\Fire_6B.gdb"
+###################################################### FITTINGS 
+input_fc = "Fitting"
+input6A_fc = os.path.join(GDB_6A, input_fc)
+input6B_fc = os.path.join(GDB_6B, input_fc)
+
+output_fc = r"D:\Amaala Staff Village\utilities\Infra Arcpro Projects\Fire 6A and 6B\Corrected.gdb\Junction_Combined"
+arcpy.management.Merge([input6A_fc, input6B_fc], output_fc)
+
+###################################################### APPURTENANCE
+input_fc1 = "Appurtenance"
+input6A_fc1 = os.path.join(GDB_6A, input_fc1)
+input6B_fc1 = os.path.join(GDB_6B, input_fc1)
+
+output_fc = r"D:\Amaala Staff Village\utilities\Infra Arcpro Projects\Fire 6A and 6B\Corrected.gdb\Appurtenance_Combined"
+arcpy.management.Merge([input6A_fc, input6B_fc], output_fc)
+
+
+
+target_GDB = r"D:\Amaala Staff Village\utilities\Updated Target Schema\Only Filled Data - Corrected\TRSDC DB.gdb"
 targetFc_name = "usfnJunctionP"
 targetFc = os.path.join(target_GDB, targetFc_name)
-
-input_fitting = "Fitting"
 schema_type = "No_Test"
+
+arcpy.env.workspace = r"D:\Amaala Staff Village\utilities\Infra Arcpro Projects\Fire 6A and 6B\Corrected.gdb"
+input_fc = "Junction_Combined"
+input_fc1 = "Appurtenance_Combined"
+
+input_lyr = "DismJoint_Layer"
   
 arcpy.management.TruncateTable(targetFc)
 
 ################---------  selecting Dismantling JOINT
-arcpy.management.MakeFeatureLayer("Appurtenance", "DismJoint_Layer", "aec_Desc LIKE '%Dismantling joint%'")
+arcpy.management.MakeFeatureLayer(input_fc1, "DismJoint_Layer", "aec_Desc LIKE '%Dismantling joint%'")
 
 # hn add field mappings objects --->
 fms = arcpy.FieldMappings()
@@ -22,21 +45,28 @@ fms.addTable(targetFc)
 
 ##### Asser ID field
 fm_assetID = arcpy.FieldMap()
-fm_assetID.addInputField(input_fitting, "AMAALA_Elements_Operations_AMA8")
+fm_assetID.addInputField(input_fc, "AMAALA_Elements_Operations_AMA8")
 assetID_field = fm_assetID.outputField
 assetID_field.name = 'AssetID'
 fm_assetID.outputField = assetID_field
 
 ##### Elevation field
 fm_elev = arcpy.FieldMap()
-fm_elev.addInputField(input_fitting, "Elevation")
+fm_elev.addInputField(input_fc, "Elevation")
 elev_field = fm_elev.outputField
 elev_field.name = 'Elevation'
 fm_elev.outputField = elev_field
 
+##### Drawing Ref
+fm_DrwID = arcpy.FieldMap()
+fm_DrwID.addInputField(input_fc, "AMAALA_Elements_Operations_AM31")
+DrwID_field = fm_DrwID.outputField
+DrwID_field.name = 'Ref_Drawing_ID'
+fm_DrwID.outputField = DrwID_field
+
 ##### Description field
 fm_description = arcpy.FieldMap()
-fm_description.addInputField(input_fitting, "aec_Desc")
+fm_description.addInputField(input_fc, "aec_Desc")
 desc_field = fm_description.outputField
 desc_field.name = 'Description'
 fm_description.outputField = desc_field
@@ -45,10 +75,8 @@ fms.addFieldMap(fm_elev)
 fms.addFieldMap(fm_assetID)
 fms.addFieldMap(fm_description)
 
-arcpy.management.Append(input_fitting, targetFc, schema_type, fms)
-arcpy.management.Append("DismJoint_Layer", targetFc, schema_type, fms)
-
-
+arcpy.management.Append(input_fc, targetFc, schema_type, fms)
+arcpy.management.Append(input_lyr, targetFc, schema_type, fms)
 ############################------------FIELD CALCULATING------------##################################
 ########----Matching fields between all feature classes
 
@@ -58,17 +86,20 @@ fields=[
 ["StreetName", '"Tabuk, Alwajh"'],
 ["ProximityToNetwork", "5"],
 ["PipeType", "1"],
-["dataSource", '"CAD"'],
+    
+["dataSource", '"Amaala"'],
+["G_Elevation_Source","3"],
     
 ["Manufacture", '"AVK SAUDI, CSA ITALY, AVK CHINA" if "Dismantling joint" in !Description! else "NAFFCO / SHIELD"'], 
 ["Material", '1 if "Dismantling joint" in !Description! else 8'],
 
-["Diameter2", '90 if "Reducer" in !Description! else None'],
+["Diameter2", '90 if "Reducer" in !Description! else 160 if "Tee" in !Description! else None'],
 ["Diameter1", "160"],
     
     ["AssetType", '''
         2 if !Description!.split(" ")[0].strip() == "Bend"
         else 18 if "Elbow" in !Description!
+        else 9 if "Tee" in !Description!
         else 34 if "Flange" in !Description!
         else 7 if "Reducer" in !Description!
         else 36 if "Segmented Bend" in !Description!
@@ -92,7 +123,7 @@ fields=[
 # Inservice  
 ["InServiceGDate", "datetime.datetime.strptime('12/01/2025', '%m/%d/%Y')"],
 ["InServiceHDate", '"10 Jumada II 1447"'],
-["BIM360_Link","https://acc.autodesk.com/docs/files/projects/9b55ab58-f9b7-46ae-8007-eacfa358f9d2?folderUrn=urn%3Aadsk.wipprod%3Afs.folder%3Aco.zAFN7bn2UIucaY64V_uiSg&viewModel=detail&moduleId=folders"],
+["BIM360_Link",'"https://acc.autodesk.com/docs/files/projects/9b55ab58-f9b7-46ae-8007-eacfa358f9d2?folderUrn=urn%3Aadsk.wipprod%3Afs.folder%3Aco.IGKlmPvgQ3mZTADghgoYDg&viewModel=detail&moduleId=folders&referrer_url=https%3A%2F%2Fteams.public.onecdn.static.microsoft%2F"'],
 ["ProjectID", '"1SV10110"'],
 ["Pressure", "None"],
 ]
