@@ -96,7 +96,6 @@ fms.addFieldMap(fm_DrwID)
 fms.addFieldMap(fm_Diam)
 fms.addFieldMap(fm_FID)
 
-
 arcpy.management.Append(input_fc, targetFc, schema_type, fms)
 
 ############################------------FIELD CALCULATING------------##################################
@@ -169,34 +168,10 @@ arcpy.management.TruncateTable(targetFc)
 ##################################---------  selecting only manholes #########################################
 arcpy.management.MakeFeatureLayer(input_fc, "MH_lyr", "AMAALA_Elements_Description_AMA LIKE '%Structures%'")
 
-arcpy.management.AddField(MH_lyr, "Max_Z", "Double")
-arcpy.management.AddField(MH_lyr, "Min_Z", "Double")
-arcpy.management.AddField(MH_lyr, "Height", "Double")
-
-arcpy.management.AlterField("MH_lyr","Elevation", "Elev_1", "Elev_1")
-
-geometryProperty = [
-    ["Max_Z", "EXTENT_MAX_Z"],
-    ["Min_Z", "EXTENT_MIN_Z"],
-]
-arcpy.management.CalculateGeometryAttributes(MH_lyr, geometryProperty)
-
-fields=[
-["Height", "!Min_Z! - !Max_Z!"],
-]
-arcpy.management.CalculateFields(MH_lyr, "Python", fields)
-
 ##################################------------FIELD MAPPINGS------------########################################
 # hn add field mappings objects --->
 fms = arcpy.FieldMappings()
 fms.addTable(targetFc)
-
-##### Asser ID field ----> didnt work bc Asset ID is long not Text will put it in remarks 
-fm_height = arcpy.FieldMap()
-fm_height.addInputField(MH_lyr, "Height")
-height_field = fm_height.outputField
-height_field.name = 'Elevation'
-fm_height.outputField = height_field
 
 fm_assetID = arcpy.FieldMap()
 fm_assetID.addInputField(MH_lyr, "AMAALA_Elements_Operations_AMA8")
@@ -224,9 +199,14 @@ fms.addFieldMap(fm_DrwID)
 
 arcpy.management.Append(MH_lyr, targetFc, schema_type, fms)
 
+############################------------Calculating Max z && Min z && Height for Manhole Feature Class------------##################################
 ############################------------FIELD GEOMETRY CALCULATING------------##################################
-# Calculate Geomerty
+arcpy.management.AddField(targetFc, "Max_Z", "Double")
+arcpy.management.AddField(targetFc, "Min_Z", "Double")
+
 geometryProperty = [
+    ["Max_Z", "EXTENT_MAX_Z"],
+    ["Min_Z", "EXTENT_MIN_Z"],
     ["Xcoordinate", "EXTENT_MAX_X"],
     ["Ycoordinate", "EXTENT_MAX_Y"],
 ]
@@ -240,6 +220,7 @@ fields=[
 ["dataSource", '"Amaala"'],
 ["G_Elevation_Source","3"],
 
+["Elevation", "!Min_Z! - !Max_Z!"],
 # month/day/year Date convention
 #Design
 ["DesignCompany", "39"],
@@ -261,7 +242,7 @@ fields=[
 ]
 
 arcpy.management.CalculateFields(targetFc, "Python", fields)
-
+arcpy.management.Delete(MH_lyr)
 print("Done MANHOLES Multipatch successfully")
 
 ###############################-------------- MANHOLE POINT --------------#####################################
@@ -281,7 +262,9 @@ target_GDB = r"D:\Amaala Staff Village\utilities\Updated Target Schema\Only Fill
 targetFc_name = "uswwManholeP"
 targetFc = os.path.join(target_GDB, targetFc_name)
 schema_type = "No_Test"
-MH_lyr = "MH_lyr"
+
+joinFc_name = "uswwEquipmentS"
+joinFc = os.path.join(target_GDB, joinFc_name)
 
 arcpy.env.workspace = r"D:\Amaala Staff Village\utilities\Infra Arcpro Projects\Sewer 6A and 6B\Corrected.gdb"
 input_fc = "Structure_Combined"
@@ -340,7 +323,7 @@ arcpy.management.Append(input_fc, targetFc, schema_type, fms)
 ##################################------------JOIN------------########################################
 arcpy.management.MakeFeatureLayer(targetFc, "target_lyr")
 target_lyr = "target_lyr"
-arcpy.management.AddJoin(target_lyr, "Remarks", MH_lyr , "AMAALA_Elements_Operations_AMA8")
+arcpy.management.AddJoin(target_lyr, "Remarks", joinFc , "AssetID")
 ############################------------FIELD CALCULATING------------##################################
 fields=[
 ["StreetName", '"Tabuk, Alwajh"'],
@@ -349,10 +332,10 @@ fields=[
 ["ProximityToNetwork", "3"],
 ["AssetType", "6"],
 ["dataSource", '"Amaala"'],
-["ManholeShape", '1 if "BEC MH" in !Description! else 3'],
-["InvertElevation","!Min_Z!"],
-["Elevation","!Height!"],
-["Depth","!Max_Z! - !Min_Z!"],
+["ManholeShape", '1 if "BEC MH" in !uswwEquipmentS.Description! else 3'],
+["InvertElevation","!uswwEquipmentS.Min_Z!"],
+["Elevation","!uswwEquipmentS.Min_Z! - !uswwEquipmentS.Max_Z!"],
+["Depth","!uswwEquipmentS.Max_Z! - !uswwEquipmentS.Min_Z!"],
 ["G_Elevation_Source","3"],
 # month/day/year Date convention
 #Design
@@ -381,6 +364,7 @@ geometryProperty = [
 ]
 arcpy.management.CalculateGeometryAttributes(targetFc, geometryProperty)
 arcpy.management.Delete(target_lyr)
+arcpy.management.DeleteField(joinFc, ["Max_Z", "Min_Z"])
 print("Done MANHOLES POINT from Structure successfully")
 
 import arcpy 
@@ -392,19 +376,20 @@ target_GDB = r"D:\Amaala Staff Village\utilities\Updated Target Schema\Only Fill
 targetFc_name = "uswwLateralLineL"
 targetFc = os.path.join(target_GDB, targetFc_name)
 
-MH_lyr = "MH_lyr"
-
-arcpy.ddd.Intersect3DLineWithMultiPatch(targetFc, MH_lyr, "ALL", "IntersectPoints", "IntersectLines")
+multipatchFc_name = "uswwEquipmentS"
+multipatchFc = os.path.join(target_GDB, multipatchFc_name)
+ 
+arcpy.ddd.Intersect3DLineWithMultiPatch(targetFc, multipatchFc, "ALL", "IntersectPoints", "IntersectLines")
 arcpy.management.MakeFeatureLayer("IntersectLines", "Intersect_lyr")
 
 arcpy.management.DeleteField("Intersect_lyr", ["LINE_OID", "FROM_MP_ID", "TO_MP_ID", "DIST_3D", "LENGTH_3D"])
 
-arcpy.management.SelectLayerByLocation("Intersect_lyr", "COMPLETELY_WITHIN", MH_lyr, "", "NEW_SELECTION")
+arcpy.management.SelectLayerByLocation("Intersect_lyr", "COMPLETELY_WITHIN", multipatchFc, "", "NEW_SELECTION")
 arcpy.management.DeleteRows("Intersect_lyr")
 
 arcpy.management.TruncateTable(targetFc)
 arcpy.management.Append("Intersect_lyr", targetFc, "TEST")
-arcpy.management.Delete(MH_lyr)
+arcpy.management.Delete("Intersect_lyr")
 print("Done removing the intersected pipes with Manholes successfully")
 
 ################################ extracting Pipes End-points #################################
