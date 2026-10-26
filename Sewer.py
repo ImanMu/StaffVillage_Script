@@ -60,11 +60,11 @@ endElev_field.name = 'EndPipeElevation'
 fm_endElev.outputField = endElev_field
 
 ##### Description
-fm_desc = arcpy.FieldMap()
-fm_desc.addInputField(input_fc, "aec_Desc")
-desc_field = fm_desc.outputField
-desc_field.name = 'Description'
-fm_desc.outputField = desc_field
+#fm_desc = arcpy.FieldMap()
+#fm_desc.addInputField(input_fc, "aec_Desc")
+#desc_field = fm_desc.outputField
+#desc_field.name = 'Description'
+#fm_desc.outputField = desc_field
 
 ##### Drawing Ref
 fm_DrwID = arcpy.FieldMap()
@@ -91,7 +91,7 @@ fms.addFieldMap(fm_elev)
 fms.addFieldMap(fm_assetID)
 fms.addFieldMap(fm_strtElev)
 fms.addFieldMap(fm_endElev)
-fms.addFieldMap(fm_desc)
+#fms.addFieldMap(fm_desc)
 fms.addFieldMap(fm_DrwID)
 fms.addFieldMap(fm_Diam)
 fms.addFieldMap(fm_FID)
@@ -106,6 +106,7 @@ fields=[
 ["Material", "1"],
 ["dataSource", '"Amaala"'],
 ["G_Elevation_Source","3"],
+["Elevation", "(!StartPipeElevation! + !EndPipeElevation!) / 2"],
    
 # month/day/year Date convention
 #Design
@@ -194,7 +195,6 @@ fm_DrwID.outputField = DrwID_field
 
 fms.addFieldMap(fm_assetID)
 fms.addFieldMap(fm_desc)
-fms.addFieldMap(fm_height)
 fms.addFieldMap(fm_DrwID)
 
 arcpy.management.Append(MH_lyr, targetFc, schema_type, fms)
@@ -398,6 +398,7 @@ import os
 
 gdb = r"D:\Amaala Staff Village\utilities\Infra Arcpro Projects\Sewer 6A and 6B\Corrected.gdb"
 target_gdb = r"D:\Amaala Staff Village\utilities\Updated Target Schema\Only Filled Data - Corrected\TRSDC DB.gdb"
+arcpy.env.workspace = r"D:\Amaala Staff Village\utilities\Infra Arcpro Projects\Sewer 6A and 6B\Corrected.gdb"
 
 pipes = os.path.join(gdb, "Pipes_Combined")
 manholes = os.path.join(gdb, "Structure_Combined")
@@ -558,9 +559,9 @@ fields=[
 ]
 arcpy.management.CalculateFields(manholes_fc, "Python", fields)
 
-arcpy.management.DeleteField(manholes_fc, "TARGET_FID")
+#arcpy.management.DeleteField(manholes_fc, "TARGET_FID")
 
-###############################-------------- Moving Manholes Points --------------#####################################
+###############################-------------- Moving Manholes Points to the Average Elevations --------------#####################################
 import arcpy
 import os
 
@@ -602,6 +603,7 @@ with arcpy.da.UpdateCursor(
 print(f"Updated point Z values: {updated}")
 print(f"Skipped points with all four fields NULL: {skipped}")
 
+################################################ extending pipes to manholes for connectivity rules###############################################
 import arcpy
 import os
 from collections import defaultdict
@@ -819,5 +821,265 @@ missing_pipe_ids = set(connections) - found_pipe_ids
 print(f"Processed and saved pipes: {updated}")
 print(f"Skipped pipes: {skipped}")
 print(f"Table pipe IDs not found in pipe feature class: {len(missing_pipe_ids)}")
+
+
+
+import arcpy
+
+# --------------------------------------------------
+# 1. INPUTS
+# --------------------------------------------------
+####### I first runned the script using the Tin for the 6A(62) zone 
+#points = r"D:\Amaala Staff Village\utilities\Infra Arcpro Projects\Sewer 6A and 6B\Corrected.gdb\Pipe_Endpoints_6A"
+#ground_polygon = r"D:\Amaala Staff Village\utilities\Infra Arcpro Projects\Random\Random.gdb\SurfaceBorder"
+#ground_tin = r"D:\TIN\tin"
+
+####### Then runned the script using the Tin for the 6B(61) zone 
+points = r"D:\Amaala Staff Village\utilities\Infra Arcpro Projects\Sewer 6A and 6B\Corrected.gdb\Pipe_Endpoints_6B"
+ground_polygon = r"D:\Amaala Staff Village\utilities\Infra Arcpro Projects\Random\Random.gdb\SurfaceBorder_1"
+ground_tin = r"D:\TIN\tin2"
+
+# TIN output: a new dataset inside an existing normal folder.
+output_field = "GroundElevation"
+
+arcpy.env.overwriteOutput = True
+
+try:
+
+    # --------------------------------------------------
+    # 3. ADD/CHECK THE OUTPUT FIELD
+    # --------------------------------------------------
+
+    fields = {
+        field.name: field
+        for field in arcpy.ListFields(points)
+    }
+
+    if output_field not in fields:
+        arcpy.management.AddField(
+            points, output_field, "DOUBLE"
+        )
+    else:
+        field = fields[output_field]
+
+        if field.type not in ("Double", "Single"):
+            raise ValueError(
+                f"{output_field} must be Double or Float."
+            )
+
+        if not field.isNullable:
+            raise ValueError(
+                f"{output_field} must allow NULL."
+            )
+
+    # Clear previous ground results, including points outside.
+    with arcpy.da.UpdateCursor(
+        points, [output_field], explicit=True
+    ) as cursor:
+        for row in cursor:
+            row[0] = None
+            cursor.updateRow(row)
+
+    # --------------------------------------------------
+    # 4. SELECT ENDPOINTS INSIDE/TOUCHING THE POLYGON
+    # --------------------------------------------------
+
+    points_layer = arcpy.management.MakeFeatureLayer(
+        points, "ground_sample_points_lyr"
+    )[0]
+
+    arcpy.management.SelectLayerByLocation(
+        in_layer=points_layer,
+        overlap_type="INTERSECT",
+        select_features=ground_polygon,
+        selection_type="NEW_SELECTION"
+    )
+
+    selected = int(
+        arcpy.management.GetCount(points_layer)[0]
+    )
+
+    calculated = 0
+
+    if selected > 0:
+        # --------------------------------------------------
+        # 5. SAMPLE THE TIN AT EACH SELECTED POINT
+        # --------------------------------------------------
+
+        arcpy.ddd.AddSurfaceInformation(
+            in_feature_class=points_layer,
+            in_surface=ground_tin,
+            out_property="Z",
+            method="LINEAR"
+        )
+
+        # --------------------------------------------------
+        # 6. COPY THE SAMPLED Z INTO GroundElevation
+        # --------------------------------------------------
+
+        with arcpy.da.UpdateCursor(
+            points_layer,
+            ["Z", output_field],
+            explicit=True
+        ) as cursor:
+
+            for row in cursor:
+                row[1] = row[0]
+                cursor.updateRow(row)
+
+                if row[1] is not None:
+                    calculated += 1
+
+    print(f"Endpoints inside/touching polygon: {selected}")
+    print(f"Ground elevations calculated: {calculated}")
+    print(f"Updated field: {output_field}")
+
+finally:
+    arcpy.CheckInExtension("3D")  
+    arcpy.management.Delete("ground_sample_points_lyr")
+
+import arcpy
+
+#points = r"D:\Amaala Staff Village\utilities\Infra Arcpro Projects\Sewer 6A and 6B\Corrected.gdb\Pipe_Endpoints_6A
+
+points = r"D:\Amaala Staff Village\utilities\Infra Arcpro Projects\Sewer 6A and 6B\Corrected.gdb\Pipe_Endpoints_6B"
+pipes = r"D:\Amaala Staff Village\utilities\Updated Target Schema\Only Filled Data - Corrected\TRSDC DB.gdb\uswwLateralLineL"
+
+# COMMON ID FIELDS — change these names
+point_pipe_id_field = "PIPE_ID"   # Pipe ID stored in endpoint points
+pipe_id_field = "FIXED_ID"        # Matching ID in the pipe feature class
+
+# Endpoint designation field — must contain START / END
+endpoint_type_field = "EndT"
+
+point_elevation_field = "GroundElevation"
+start_elevation_field = "StartPipeGroundElevation"
+end_elevation_field = "EndPipeGroundElevation"
+
+# Keep text and numeric identifiers as stored.
+# Make sure both ID fields have compatible types and values.
+endpoint_elevations = {}
+conflicts = set()
+
+# Read elevations by (pipe ID, endpoint type).
+with arcpy.da.SearchCursor(
+    points,
+    [
+        point_pipe_id_field,
+        endpoint_type_field,
+        point_elevation_field
+    ]
+) as cursor:
+
+    for pipe_id, endpoint_type, elevation in cursor:
+
+        if pipe_id is None or elevation is None:
+            continue
+
+# Convert the text PIPE_ID to an integer to match FIXED_ID.
+        try:
+            pipe_id = int(str(pipe_id).strip())
+        except ValueError:
+            print(f"Skipped invalid PIPE_ID: {pipe_id!r}")
+            continue
+    
+        endpoint_type = str(endpoint_type).strip().upper()
+
+        if endpoint_type not in ("START", "END"):
+            print(
+                f"Skipped pipe ID {pipe_id}: "
+                f"unknown endpoint type {endpoint_type!r}"
+            )
+            continue
+
+        key = (pipe_id, endpoint_type)
+
+        # Do not silently overwrite conflicting elevations.
+        if (
+            key in endpoint_elevations
+            and endpoint_elevations[key] != elevation
+        ):
+            conflicts.add(key)
+        else:
+            endpoint_elevations[key] = elevation
+
+updated_starts = 0
+updated_ends = 0
+unmatched = 0
+
+# Update attributes only—no geometry matching.
+with arcpy.da.UpdateCursor(
+    pipes,
+    [
+        pipe_id_field,
+        start_elevation_field,
+        end_elevation_field
+    ]
+) as cursor:
+
+    for row in cursor:
+        pipe_id = row[0]
+
+        start_key = (pipe_id, "START")
+        end_key = (pipe_id, "END")
+
+        changed = False
+
+        if (
+            start_key in endpoint_elevations
+            and start_key not in conflicts
+        ):
+            row[1] = endpoint_elevations[start_key]
+            updated_starts += 1
+            changed = True
+
+        if (
+            end_key in endpoint_elevations
+            and end_key not in conflicts
+        ):
+            row[2] = endpoint_elevations[end_key]
+            updated_ends += 1
+            changed = True
+
+        if changed:
+            cursor.updateRow(row)
+        else:
+            unmatched += 1
+
+print(f"Start elevations updated: {updated_starts}")
+print(f"End elevations updated: {updated_ends}")
+print(f"Pipes with neither endpoint updated: {unmatched}")
+print(f"Conflicting endpoint keys skipped: {len(conflicts)}")
+
+for pipe_id, endpoint_type in conflicts:
+    print(f"Check conflicting elevations: {pipe_id}, {endpoint_type}")
+
+########### Calculate the pipeLines
+targetFc = r"D:\Amaala Staff Village\utilities\Updated Target Schema\Only Filled Data - Corrected\TRSDC DB.gdb\uswwLateralLineL"
+arcpy.management.AddField(targetFc, "Temp_Str", "DOUBLE")
+arcpy.management.AddField(targetFc, "Temp_End", "DOUBLE")
+
+fields=[
+["Temp_Str", "!StartPipeElevation!"],
+["Temp_End", "!EndPipeElevation!"],
+]
+arcpy.management.CalculateFields(targetFc, "Python", fields)
+
+
+fields1=[
+["StartPipeElevation", "!Temp_Str! - !StartPipeGroundElevation!"],
+["EndPipeElevation", "!Temp_End! - !EndPipeGroundElevation!"],
+]
+
+arcpy.management.CalculateFields(targetFc, "Python", fields1)
+arcpy.management.DeleteField(targetFc, ["Temp_Str", "Temp_End"])
+
+############ Calculating ELevation and G Elevation
+fields1=[
+["Elevation", "(!StartPipeElevation! + !EndPipeElevation!)/2"],
+["G_Elevation", "(!StartPipeGroundElevation! + !EndPipeGroundElevation!)/2"],
+]
+
+arcpy.management.CalculateFields(targetFc, "Python", fields1)
 
 
